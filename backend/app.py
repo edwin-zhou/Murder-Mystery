@@ -1,3 +1,4 @@
+import base64
 import io
 from typing import Optional
 from google.cloud import speech
@@ -9,6 +10,7 @@ import uuid
 import ffmpeg
 from openai import OpenAI
 import requests
+from imageUtils import format_images_to_openai_content
 
 import json
 
@@ -41,6 +43,7 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all HTTP methods
     allow_headers=["*"],  # Allows all headers
 )
+
 
 # Initialize pyannote Speaker Diarization pipeline
 # Replace 'YOUR_HF_TOKEN' with your actual Hugging Face token
@@ -99,7 +102,13 @@ async def process_video(file: UploadFile = File(...)):
         }
         response_data["scenes"].append(scene_item)
 
-    return JSONResponse(content=response_data)
+    scene_data = aggregate_scene_data(response_data)
+
+    # 6. Build prompts for each scene and process them
+    llm_response_query = process_scenes(scene_data)
+
+    return JSONResponse(content=llm_response_query)
+
 
 def detect_scenes(video_path: str, threshold: float = 30.0):
     """
@@ -119,7 +128,7 @@ def detect_scenes(video_path: str, threshold: float = 30.0):
     scenes = []
     for scene in scene_list:
         start = scene[0].get_seconds()  # float
-        end = scene[1].get_seconds()    # float
+        end = scene[1].get_seconds()  # float
         scenes.append((start, end))
 
     # If no scenes found, return the entire duration as a single "scene"
@@ -129,6 +138,7 @@ def detect_scenes(video_path: str, threshold: float = 30.0):
 
     video_manager.release()
     return scenes
+
 
 def extract_audio(video_path: str, audio_path: str):
     """
@@ -141,6 +151,7 @@ def extract_audio(video_path: str, audio_path: str):
         .overwrite_output()
         .run(quiet=True)
     )
+
 
 def transcribe_audio(audio_path: str) -> Optional[list[TranscriptionSegment]]:
     """
@@ -178,7 +189,8 @@ def run_diarization(audio_path: str) -> list:
         list: Aligned results with {start, end, speaker, text}.
     """
     # Initialize the Speech-to-Text client
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\eyyypc\PycharmProjects\Murder-Mystery\backend\ensemble-demo-421315-ab61fb41873d.json"
+    os.environ[
+        "GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\eyyypc\PycharmProjects\Murder-Mystery\backend\ensemble-demo-421315-ab61fb41873d.json"
 
     client = speech.SpeechClient()
 
@@ -250,7 +262,6 @@ def run_diarization(audio_path: str) -> list:
     return aligned_results
 
 
-
 def extract_screenshots(video_path: str, scenes: list, output_dir: str):
     """
     For each scene, extract frames at 0.2 fps (1 frame every 5 seconds).
@@ -293,6 +304,135 @@ def extract_screenshots(video_path: str, scenes: list, output_dir: str):
         screenshot_data.append(scene_images)
 
     return screenshot_data
+
+
+def aggregate_scene_data(data) -> list[dict]:
+    """
+    data is expected to have two keys:
+        - "scenes": a list of scene dicts, each with:
+            scene_index, start, end, screenshots
+        - "diarization": a list of transcript segments, each with:
+            start, end, speaker, text
+
+    This function will return a list of scene dictionaries, where each
+    includes all diarization segments that occur within that scene's time range.
+    """
+    all_scenes = data["scenes"]
+    all_segments = data["diarization"]
+
+    aggregated_scenes = []
+
+    for scene in all_scenes:
+        scene_index = scene["scene_index"]
+        scene_start = scene["start"]
+        scene_end = scene["end"]
+        screenshots = scene.get("screenshots", [])
+
+        # Collect diarization segments that fall into [scene_start, scene_end]
+        relevant_segments = []
+        for seg in all_segments:
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+
+            # Check if the segment is within the scene's time window
+            if seg_start >= scene_start and seg_end <= scene_end:
+                relevant_segments.append({
+                    "start": seg_start,
+                    "end": seg_end,
+                    "speaker": seg["speaker"],
+                    "text": seg["text"]
+                })
+
+        aggregated_scenes.append({
+            "scene_index": scene_index,
+            "start": scene_start,
+            "end": scene_end,
+            "screenshots": screenshots,
+            "segments": relevant_segments
+        })
+
+    return aggregated_scenes
+
+
+def build_prompt_for_scene(scene):
+    """
+    scene: dict with keys:
+      - scene_index
+      - start
+      - end
+      - screenshots (list)
+      - segments (list of diarization segments)
+    """
+    # Combine the transcript text from all segments
+    transcript_text = ""
+    for seg in scene["segments"]:
+        start_time = seg["start"]
+        end_time = seg["end"]
+        speaker = seg["speaker"]
+        text = seg["text"]
+        transcript_text += f"[{start_time}-{end_time}] {speaker}: {text}\n"
+
+    # Example instructions telling the LLM what we want:
+    instructions = f"""
+        You are an AI specialized in extracting scene-level data for a detective knowledge graph.
+        We have the following scene (index = {scene["scene_index"]}):
+        
+        Scene start: {scene["start"]} seconds
+        Scene end: {scene["end"]} seconds
+
+        Transcript segments:
+        {transcript_text}
+        
+        Task:
+        1. Identify any key events, relationships, or evidence mentioned in this scene.
+        2. Return a Cypher query (for Neo4j) that would insert or update the relevant nodes and relationships in our graph.
+           - We have a schema with (Person, Event, Evidence, etc.). 
+           - Use MERGE or CREATE as necessary.
+           - Add relevant properties from the scene, including times, speaker references, etc.
+        
+        Output ONLY the Cypher query, nothing else.
+        """
+
+    images = [format_images_to_openai_content(screenshot) for screenshot in scene['screenshots']]
+
+    return [{"type": "text", "text": instructions}] + images
+
+
+def process_scenes(scene_transcripts):
+    """
+    For each scene, build the prompt, attach each screenshot as a Base64 data URL,
+    and send the request to OpenAI ChatCompletion.
+    """
+    for scene_info in scene_transcripts:
+        # 1. Build your textual prompt (scene metadata + transcript)
+        prompt = build_prompt_for_scene(scene_info)
+
+        # 3. Combine the textual prompt plus the image data into the message array
+        #    There are a few ways to structure these. Below, we place the text prompt
+        #    in one user message, then place each image object in its own user message
+        #    in JSON form. Adjust this as needed for your use case.
+
+
+        # 4. Call the OpenAI ChatCompletion endpoint
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1
+        )
+
+        # Extract the LLM response
+        query = response.choices[0].message.content
+
+        print("----- Scene Index:", scene_info["scene_index"], "-----")
+        print(query)
+        print("---------------------------------------------\n")
+
+        # Optionally: execute the query against Neo4j
+        # execute_in_neo4j(query)
+        return query
+
 
 # # Generate the OpenAPI schema
 # openapi_schema = app.openapi()
