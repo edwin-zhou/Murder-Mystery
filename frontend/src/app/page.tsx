@@ -91,6 +91,8 @@ export default function Home() {
               <FlipCard></FlipCard>
               <FlipCard></FlipCard>
               <FlipCard></FlipCard>
+              <FlipCard></FlipCard>
+              <FlipCard></FlipCard>
           </div>
 
 

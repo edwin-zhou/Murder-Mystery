@@ -8,7 +8,9 @@
 }
 
 .flip-container {
-    grid-columns: 1fr 1fr 1fr 1fr 1fr;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
+    grid-gap: 20px;
 }
 /* This container is needed to position the front and back side */
 .flip-card-inner {
