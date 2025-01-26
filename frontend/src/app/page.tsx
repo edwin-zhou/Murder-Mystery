@@ -103,8 +103,8 @@ export default function Home() {
           </div>
           <Card>
               <CardHeader>
-                  <CardTitle>Bar Chart - Mixed</CardTitle>
-                  <CardDescription>January - June 2024</CardDescription>
+                  <CardTitle>Suspect Analysis</CardTitle>
+                  <CardDescription>Broken Down By Scene</CardDescription>
               </CardHeader>
               <CardContent>
                   <div className="response-container">
@@ -112,8 +112,8 @@ export default function Home() {
                           <ul>
                               {response.map((item, index) => (
                                   <li key={index}>
-                                      <strong>Person:</strong> {item.person}, <strong>Suspicion
-                                      Score:</strong> {item.suspicion_score}, <strong>Reasoning:</strong> {item.reasoning}
+                                    {item}
+
                                   </li>
                               ))}
                           </ul>
