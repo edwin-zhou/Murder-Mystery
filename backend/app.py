@@ -12,6 +12,10 @@ import ffmpeg
 from openai import OpenAI
 import requests
 from imageUtils import format_images_to_openai_content
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from langchain.agents import initialize_agent, AgentType
+from langchain_openai import ChatOpenAI
 
 import json
 
@@ -29,10 +33,52 @@ load_dotenv()
 
 # Access the environment variable
 hf_token = os.getenv("HF_TOKEN")
-openai_key = os.getenv("OPENAI_TOKEN")
+openai_key = os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(
     api_key=openai_key
 )
+
+class Neo4jQueryInput(BaseModel):
+    query: str = Field(..., description="A raw Cypher query to execute against the Neo4j database.")
+
+# Define the Neo4jQueryTool class
+class Neo4jQueryTool(BaseTool):
+    name: str = "run_query"  # Explicitly annotate the type
+    description: str = "Use this tool to execute a raw Cypher query against the Neo4j database. Provide a valid Cypher query string."
+    args_schema: type = Neo4jQueryInput  # Explicitly set the schema type
+
+    def _run(self, query: str):
+        """
+        Synchronously run the query using the run_query function.
+        :param query: Raw Cypher query string
+        :return: dict with success and results or error
+        """
+        return run_query(query)
+
+    async def _arun(self, query: str):
+        """
+        Asynchronous version of the _run method (optional).
+        :param query: Raw Cypher query string
+        :raise NotImplementedError: This tool does not currently support async operations.
+        """
+        raise NotImplementedError("Neo4jQueryTool does not support asynchronous execution.")
+
+
+neo4j_tool = Neo4jQueryTool()
+tools = [neo4j_tool]
+
+llm = ChatOpenAI(
+    model_name="gpt-4o",
+    temperature=0.0
+)
+
+agent = initialize_agent(
+    tools=tools,
+    llm=llm,
+    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True
+)
+
 
 # Replace these with your actual Neo4j Aura credentials
 URI = "neo4j+s://d381ec68.databases.neo4j.io"
@@ -118,14 +164,9 @@ async def process_video(file: UploadFile = File(...)):
     scene_data = aggregate_scene_data(response_data)
 
     # 6. Build prompts for each scene and process them
-    llm_response_queries = process_scenes(scene_data)
+    llm_response_queries = process_scenes_langchain(scene_data)
 
-    # 7. Run the generated queries against Neo4j
-    db_results = []
-    for query in llm_response_queries:
-        db_results.append(run_query(query))
-
-    return JSONResponse(content=db_results)
+    return JSONResponse(content=llm_response_queries)
 
 
 def detect_scenes(video_path: str, threshold: float = 30.0):
@@ -296,7 +337,8 @@ def extract_screenshots(video_path: str, scenes: list, output_dir: str):
         output_pattern = os.path.join(output_dir, f"scene_{idx}_%03d.jpg")
 
         # Using ffmpeg-python to extract frames at 1/5 fps
-        fps = 1 / 5 if scene_duration >= 5 else 1 / scene_duration  # Adjust fps for short scenes
+        # fps = 1 / 5 if scene_duration >= 5 else 1 / scene_duration  # Adjust fps for short scenes
+        fps = 1 / scene_duration  # Adjust fps for short scenes
         try:
             (
                 ffmpeg
@@ -361,11 +403,12 @@ def aggregate_scene_data(data) -> list[dict]:
                     "text": seg["text"]
                 })
 
+        # TODO
         aggregated_scenes.append({
             "scene_index": scene_index,
             "start": scene_start,
             "end": scene_end,
-            "screenshots": screenshots,
+            "screenshots": [],
             "segments": relevant_segments
         })
 
@@ -392,7 +435,7 @@ def build_prompt_for_scene(scene):
 
     # Example instructions telling the LLM what we want:
     instructions = f"""
-        You are an AI specialized in extracting scene-level data for a detective knowledge graph.
+        You are an AI detective specialized in extracting scene-level data to extract information clues into a knowledge graph.
         We have the following scene (index = {scene["scene_index"]}):
         
         Scene start: {scene["start"]} seconds
@@ -403,12 +446,12 @@ def build_prompt_for_scene(scene):
         
         Task:
         1. Identify any key events, relationships, or evidence mentioned in this scene.
-        2. Return a Cypher query (for Neo4j) that would insert or update the relevant nodes and relationships in our graph.
-           - We have a schema with (Person, Event, Evidence, etc.). 
+        2. Query the Neo4j database using the 'run_query' tool for any existing data relevant to this scene.
+        3. Return a Cypher query (for Neo4j) that would insert or update the relevant nodes and relationships in our graph using the 'run_query' tool.
+           - We have a schema with nodes: Person, Event, Location, Evidence, Clue, Motive, Time
+           - Relationships are: INVOLVED_IN (Person → Event), OCCURRED_AT (Event → Time), LOCATED_IN (Event → Location), (Event) -[:HAS_EVIDENCE]-> (Evidence), LOCATED_AT (Person → Location), RELATES_TO (Person → Person), LEADS_TO (Motive → Event) 
            - Use MERGE or CREATE as necessary.
            - Add relevant properties from the scene, including times, speaker references, etc.
-        
-        Output ONLY the Cypher query as text, nothing else.
         """
 
     images = [format_images_to_openai_content(screenshot) for screenshot in scene['screenshots']]
@@ -416,57 +459,52 @@ def build_prompt_for_scene(scene):
     return [{"type": "text", "text": instructions}] + images
 
 
-def process_scenes(scene_transcripts):
-    """
-    For each scene, build the prompt, attach each screenshot as a Base64 data URL,
-    and send the request to OpenAI ChatCompletion.
-    """
+def process_scenes_langchain(scene_transcripts):
     queries = []
     for scene_info in scene_transcripts:
-        # 1. Build your textual prompt (scene metadata + transcript)
-        prompt = build_prompt_for_scene(scene_info)
-
-        # 3. Combine the textual prompt plus the image data into the message array
-        #    There are a few ways to structure these. Below, we place the text prompt
-        #    in one user message, then place each image object in its own user message
-        #    in JSON form. Adjust this as needed for your use case.
-
-        # 4. Call the OpenAI ChatCompletion endpoint
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.1
-        )
-
-        # Extract the LLM response
-        query = response.choices[0].message.content
-
-        print("----- Scene Index:", scene_info["scene_index"], "-----")
-        print(query)
-        print("---------------------------------------------\n")
-
-        # Optionally: execute the query against Neo4j
-        # execute_in_neo4j(query)
-        queries.append(query)
+        final_query = process_scene_langchain(scene_info)
+        queries.append({
+            "scene_index": scene_info["scene_index"],
+            "query": final_query
+        })
     return queries
 
 
-def run_query(raw_query):
+def process_scene_langchain(scene_info):
+    user_prompt = build_prompt_for_scene(scene_info)
+
+    # The agent can call `run_query` if it wants more info.
+    # Then it will eventually produce a final answer.
+    result = agent.run(user_prompt)
+    return result
+
+
+# Updated run_query function
+def run_query(raw_query: str):
+    """
+    Run a raw Cypher query against Neo4j and return the results.
+    :param raw_query: Raw Cypher query string
+    :return: dict with success (bool) and either data (list) or error (str)
+    """
     # Remove all occurrences of ``` and escape sequences
     cleaned_query = re.sub(r'```(?:cypher)?\n', '', raw_query)  # Removes starting ```cypher\n
-    cleaned_query = re.sub(r'\\n```$', '', cleaned_query)       # Removes ending \n```
-    cleaned_query = re.sub(r'```', '', cleaned_query)           # Removes stray ```
+    cleaned_query = re.sub(r'\\n```$', '', cleaned_query)  # Removes ending \n```
+    cleaned_query = re.sub(r'```', '', cleaned_query)  # Removes stray ```
+
     # Replace escaped newlines with actual newlines
-    cleaned_query = cleaned_query.replace('\\n', '\n')
+    cleaned_query = cleaned_query.replace('\\n', '\n').strip()
+
     try:
         with driver.session() as session:
-            result = session.run(cleaned_query.strip())
+            result = session.run(cleaned_query)
             return {"success": True, "data": result.data()}
     except Exception as e:
-        return {"success": False, "error": str(e)}
-
+        # Log the error and provide detailed feedback
+        return {
+            "success": False,
+            "error": str(e),
+            "query": cleaned_query  # Include the cleaned query for debugging
+        }
 
 # # Generate the OpenAPI schema
 # openapi_schema = app.openapi()
