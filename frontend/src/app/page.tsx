@@ -3,6 +3,50 @@
 import React, { useState } from "react";
 import Image from "next/image";
 import { DefaultApi } from "@services/api"; // Import the DefaultApi class
+import { Button } from "@/components/ui/button";
+import { TrendingUp } from "lucide-react";
+import { Bar } from "recharts";
+import { BarChart } from "recharts";
+import { XAxis } from "recharts";
+import { YAxis } from "recharts";
+
+import { Textarea } from "@/components/ui/textarea";
+import FlipCard from "./flip";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+const chartData = [
+    { browser: "chrome", visitors: 275, fill: "var(--color-chrome)" },
+    { browser: "safari", visitors: 200, fill: "var(--color-safari)" },
+    { browser: "firefox", visitors: 187, fill: "var(--color-firefox)" },
+    { browser: "edge", visitors: 173, fill: "var(--color-edge)" },
+    { browser: "other", visitors: 90, fill: "var(--color-other)" },
+]
+
+const chartConfig = {
+    visitors: {
+        label: "Visitors",
+    },
+    chrome: {
+        label: "Chrome",
+        color: "hsl(var(--chart-1))",
+    },
+    safari: {
+        label: "Safari",
+        color: "hsl(var(--chart-2))",
+    },
+    firefox: {
+        label: "Firefox",
+        color: "hsl(var(--chart-3))",
+    },
+    edge: {
+        label: "Edge",
+        color: "hsl(var(--chart-4))",
+    },
+    other: {
+        label: "Other",
+        color: "hsl(var(--chart-5))",
+    },
+} satisfies ChartConfig
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -31,26 +75,8 @@ export default function Home() {
   return (
     <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
       <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
+          <Textarea placeholder="Type your message here." />
+          <div className="flex gap-4 items-center flex-col sm:flex-row">
           <input type="file" accept="video/*" onChange={handleFileChange} />
           <button
             className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
@@ -59,6 +85,51 @@ export default function Home() {
             Upload Video
           </button>
         </div>
+          <div className="flip-container">
+              <FlipCard></FlipCard>
+              <FlipCard></FlipCard>
+              <FlipCard></FlipCard>
+              <FlipCard></FlipCard>
+              <FlipCard></FlipCard>
+          </div>
+
+
+          <Card>
+              <CardHeader>
+                  <CardTitle>Bar Chart - Mixed</CardTitle>
+                  <CardDescription>January - June 2024</CardDescription>
+              </CardHeader>
+              <CardContent>
+                  <ChartContainer config={chartConfig}>
+                      <BarChart
+                          accessibilityLayer
+                          data={chartData}
+                          layout="vertical"
+                          margin={{
+                              left: 0,
+                          }}
+                      >
+                          <YAxis
+                              dataKey="browser"
+                              type="category"
+                              tickLine={false}
+                              tickMargin={10}
+                              axisLine={false}
+                              tickFormatter={(value) => chartConfig[value as keyof typeof chartConfig]?.label}
+                          />
+                          <XAxis dataKey="visitors" type="number" hide />
+                          <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+                          <Bar dataKey="visitors" layout="vertical" radius={5} />
+                      </BarChart>
+                  </ChartContainer>
+              </CardContent>
+              <CardFooter className="flex-col items-start gap-2 text-sm">
+                  <div className="flex gap-2 font-medium leading-none">
+                      Trending up by 5.2% this month <TrendingUp className="h-4 w-4" />
+                  </div>
+                  <div className="leading-none text-muted-foreground">Showing total visitors for the last 6 months</div>
+              </CardFooter>
+          </Card>
       </main>
       <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
         <a
@@ -108,5 +179,7 @@ export default function Home() {
         </a>
       </footer>
     </div>
+
   );
+
 }
