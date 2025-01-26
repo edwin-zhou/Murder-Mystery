@@ -1,7 +1,6 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 import uuid
-import os
 import ffmpeg
 import json
 
@@ -42,7 +41,7 @@ async def process_video(file: UploadFile = File(...)):
 
     # 1. Save the uploaded file
     file_id = str(uuid.uuid4())  # Unique ID for this file
-    input_video_path = f"{file_id}_{file.filename}"
+    input_video_path = f"{file_id}"
     with open(input_video_path, "wb") as f:
         f.write(await file.read())
 
@@ -58,7 +57,7 @@ async def process_video(file: UploadFile = File(...)):
 
     # 5. Extract screenshots for each scene at 0.2 fps
     #    We'll store them in a directory named after the file_id
-    screenshot_dir = f"{file_id}_screenshots"
+    screenshot_dir = "screenshots"
     os.makedirs(screenshot_dir, exist_ok=True)
     screenshot_info = extract_screenshots(input_video_path, scenes, screenshot_dir)
 
@@ -156,15 +155,19 @@ def extract_screenshots(video_path: str, scenes: list, output_dir: str):
         output_pattern = os.path.join(output_dir, f"scene_{idx}_%03d.jpg")
 
         # Using ffmpeg-python to extract frames at 1/5 fps
-        (
-            ffmpeg
-            .input(video_path, ss=start_sec, t=scene_duration)
-            .filter('fps', fps=1/5)  # 0.2 fps
-            .output(output_pattern)
-            .overwrite_output()
-            .run(quiet=True)
-        )
-
+        fps = 1 / 5 if scene_duration >= 5 else 1 / scene_duration  # Adjust fps for short scenes
+        try:
+            (
+                ffmpeg
+                .input(video_path, ss=start_sec, t=scene_duration)
+                .filter('fps', fps=fps)
+                .output(output_pattern)
+                .overwrite_output()
+                .run()
+            )
+        except Exception as e:
+            print(f"Error extracting screenshots for scene {idx}: {e}")
+            continue
         # Collect the generated files
         # They follow pattern scene_{idx}_001.jpg, scene_{idx}_002.jpg, etc.
         # We'll list them in sorted order
