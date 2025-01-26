@@ -9,6 +9,7 @@ import { Bar } from "recharts";
 import { BarChart } from "recharts";
 import { XAxis } from "recharts";
 import { YAxis } from "recharts";
+import { Input } from "@/components/ui/input"
 
 import { Textarea } from "@/components/ui/textarea";
 import FlipCard from "./flip";
@@ -52,6 +53,9 @@ const chartConfig = {
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  // const [response, setResponse] = useState<{person: string, suspicion_score: number, reasoning: string}[]>([]);
+  const [response, setResponse] = useState<any[]>([]);
+
   const apiInstance = new DefaultApi(); // Create an instance of DefaultApi
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -67,8 +71,16 @@ export default function Home() {
     }
 
     try {
-      const response = await apiInstance.processVideoProcessVideoPost(selectedFile);
-      console.log(response.data);
+    const response = await apiInstance.processVideoProcessVideoPost(selectedFile);
+    const formattedResponse = response.data.map((item: any) => item.query);
+      // .filter((item: any) => typeof item.person === 'string' && typeof item.suspicion_score === 'number' && typeof item.reasoning === 'string')
+      // .map((item: any) => ({
+      //   person: item.person,
+      //   suspicion_score: item.suspicion_score,
+      //   reasoning: item.reasoning,
+      // }));
+    setResponse(formattedResponse);
+
     } catch (error) {
       console.error("Error uploading file:", error);
     }
@@ -78,55 +90,60 @@ export default function Home() {
     <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
       <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
           {/*<NeoVisGraph></NeoVisGraph>*/}
-          <Textarea placeholder="Type your message here." />
           <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <input type="file" accept="video/*" onChange={handleFileChange} />
-          <button
+          <Input type="file" accept="video/*" onChange={handleFileChange} />
+          <Button
             className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
             onClick={handleUpload}
           >
-            Upload Video
-          </button>
+            Upload Evidence Footage
+          </Button>
         </div>
           <div className="flip-container">
-              <FlipCard></FlipCard>
           </div>
-
-
           <Card>
               <CardHeader>
                   <CardTitle>Bar Chart - Mixed</CardTitle>
                   <CardDescription>January - June 2024</CardDescription>
               </CardHeader>
               <CardContent>
-                  <ChartContainer config={chartConfig}>
-                      <BarChart
-                          accessibilityLayer
-                          data={chartData}
-                          layout="vertical"
-                          margin={{
-                              left: 0,
-                          }}
-                      >
-                          <YAxis
-                              dataKey="browser"
-                              type="category"
-                              tickLine={false}
-                              tickMargin={10}
-                              axisLine={false}
-                              tickFormatter={(value) => chartConfig[value as keyof typeof chartConfig]?.label}
-                          />
-                          <XAxis dataKey="visitors" type="number" hide />
-                          <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-                          <Bar dataKey="visitors" layout="vertical" radius={5} />
-                      </BarChart>
-                  </ChartContainer>
+                  <div className="response-container">
+                      {response.length > 0 && (
+                          <ul>
+                              {response.map((item, index) => (
+                                  <li key={index}>
+                                      <strong>Person:</strong> {item.person}, <strong>Suspicion
+                                      Score:</strong> {item.suspicion_score}, <strong>Reasoning:</strong> {item.reasoning}
+                                  </li>
+                              ))}
+                          </ul>
+                      )}
+                  </div>
+
+                  {/*<ChartContainer config={chartConfig}>*/}
+                  {/*    <BarChart*/}
+                  {/*        accessibilityLayer*/}
+                  {/*        data={chartData}*/}
+                  {/*        layout="vertical"*/}
+                  {/*        margin={{*/}
+                  {/*            left: 0,*/}
+                  {/*        }}*/}
+                  {/*    >*/}
+                  {/*        <YAxis*/}
+                  {/*            dataKey="browser"*/}
+                  {/*            type="category"*/}
+                  {/*            tickLine={false}*/}
+                  {/*            tickMargin={10}*/}
+                  {/*            axisLine={false}*/}
+                  {/*            tickFormatter={(value) => chartConfig[value as keyof typeof chartConfig]?.label}*/}
+                  {/*        />*/}
+                  {/*        <XAxis dataKey="visitors" type="number" hide />*/}
+                  {/*        <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />*/}
+                  {/*        <Bar dataKey="visitors" layout="vertical" radius={5} />*/}
+                  {/*    </BarChart>*/}
+                  {/*</ChartContainer>*/}
               </CardContent>
               <CardFooter className="flex-col items-start gap-2 text-sm">
-                  <div className="flex gap-2 font-medium leading-none">
-                      Trending up by 5.2% this month <TrendingUp className="h-4 w-4" />
-                  </div>
-                  <div className="leading-none text-muted-foreground">Showing total visitors for the last 6 months</div>
               </CardFooter>
           </Card>
       </main>
