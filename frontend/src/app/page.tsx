@@ -14,6 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 import FlipCard from "./flip";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import NeoVisGraph from "./db-viewer"; // Adjust the import path as needed
+
 const chartData = [
     { browser: "chrome", visitors: 275, fill: "var(--color-chrome)" },
     { browser: "safari", visitors: 200, fill: "var(--color-safari)" },
@@ -75,6 +77,7 @@ export default function Home() {
   return (
     <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
       <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
+          {/*<NeoVisGraph></NeoVisGraph>*/}
           <Textarea placeholder="Type your message here." />
           <div className="flex gap-4 items-center flex-col sm:flex-row">
           <input type="file" accept="video/*" onChange={handleFileChange} />

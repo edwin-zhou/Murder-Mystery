@@ -1,8 +1,9 @@
 import base64
 import io
+import re
 from typing import Optional
 from google.cloud import speech
-
+from neo4j import GraphDatabase
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,6 +33,18 @@ openai_key = os.getenv("OPENAI_TOKEN")
 openai_client = OpenAI(
     api_key=openai_key
 )
+
+# Replace these with your actual Neo4j Aura credentials
+URI = "neo4j+s://d381ec68.databases.neo4j.io"
+AUTH = ("neo4j", "5vlCBP1hnzfqNyqeLbSuu6PQ_1pY6b0n_XDpfLRQPoU")
+
+# Create a driver instance
+driver = GraphDatabase.driver(URI, auth=AUTH)
+try:
+    driver.verify_connectivity()
+    print("Connection to Neo4j is good.")
+except Exception as e:
+    print(f"Connection to Neo4j failed: {e}")
 
 app = FastAPI()
 
@@ -105,9 +118,14 @@ async def process_video(file: UploadFile = File(...)):
     scene_data = aggregate_scene_data(response_data)
 
     # 6. Build prompts for each scene and process them
-    llm_response_query = process_scenes(scene_data)
+    llm_response_queries = process_scenes(scene_data)
 
-    return JSONResponse(content=llm_response_query)
+    # 7. Run the generated queries against Neo4j
+    db_results = []
+    for query in llm_response_queries:
+        db_results.append(run_query(query))
+
+    return JSONResponse(content=db_results)
 
 
 def detect_scenes(video_path: str, threshold: float = 30.0):
@@ -390,7 +408,7 @@ def build_prompt_for_scene(scene):
            - Use MERGE or CREATE as necessary.
            - Add relevant properties from the scene, including times, speaker references, etc.
         
-        Output ONLY the Cypher query, nothing else.
+        Output ONLY the Cypher query as text, nothing else.
         """
 
     images = [format_images_to_openai_content(screenshot) for screenshot in scene['screenshots']]
@@ -403,6 +421,7 @@ def process_scenes(scene_transcripts):
     For each scene, build the prompt, attach each screenshot as a Base64 data URL,
     and send the request to OpenAI ChatCompletion.
     """
+    queries = []
     for scene_info in scene_transcripts:
         # 1. Build your textual prompt (scene metadata + transcript)
         prompt = build_prompt_for_scene(scene_info)
@@ -411,7 +430,6 @@ def process_scenes(scene_transcripts):
         #    There are a few ways to structure these. Below, we place the text prompt
         #    in one user message, then place each image object in its own user message
         #    in JSON form. Adjust this as needed for your use case.
-
 
         # 4. Call the OpenAI ChatCompletion endpoint
         response = openai_client.chat.completions.create(
@@ -431,7 +449,23 @@ def process_scenes(scene_transcripts):
 
         # Optionally: execute the query against Neo4j
         # execute_in_neo4j(query)
-        return query
+        queries.append(query)
+    return queries
+
+
+def run_query(raw_query):
+    # Remove all occurrences of ``` and escape sequences
+    cleaned_query = re.sub(r'```(?:cypher)?\n', '', raw_query)  # Removes starting ```cypher\n
+    cleaned_query = re.sub(r'\\n```$', '', cleaned_query)       # Removes ending \n```
+    cleaned_query = re.sub(r'```', '', cleaned_query)           # Removes stray ```
+    # Replace escaped newlines with actual newlines
+    cleaned_query = cleaned_query.replace('\\n', '\n')
+    try:
+        with driver.session() as session:
+            result = session.run(cleaned_query.strip())
+            return {"success": True, "data": result.data()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # # Generate the OpenAPI schema
