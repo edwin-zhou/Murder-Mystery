@@ -516,12 +516,12 @@ def clear_database():
     with driver.session() as session:
         session.run(query)
 
-# Generate the OpenAPI schema
-openapi_schema = app.openapi()
-
-# Save the schema to a JSON file
-with open("openapi_schema.json", "w") as f:
-    json.dump(openapi_schema, f)
+# # Generate the OpenAPI schema
+# openapi_schema = app.openapi()
+#
+# # Save the schema to a JSON file
+# with open("openapi_schema.json", "w") as f:
+#     json.dump(openapi_schema, f)
 
 
 def main():
