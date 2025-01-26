@@ -1,9 +1,18 @@
+import io
+from typing import Optional
+from google.cloud import speech
+
 from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uuid
 import ffmpeg
+from openai import OpenAI
+import requests
+
 import json
 
+from openai.types.audio import TranscriptionSegment
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
 
@@ -17,16 +26,29 @@ load_dotenv()
 
 # Access the environment variable
 hf_token = os.getenv("HF_TOKEN")
+openai_key = os.getenv("OPENAI_TOKEN")
+openai_client = OpenAI(
+    api_key=openai_key
+)
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all HTTP methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Initialize pyannote Speaker Diarization pipeline
 # Replace 'YOUR_HF_TOKEN' with your actual Hugging Face token
 # and 'pyannote/speaker-diarization' with the correct model name or path
-diarization_pipeline = Pipeline.from_pretrained(
-    "pyannote/speaker-diarization",
-    use_auth_token=hf_token
-)
+# diarization_pipeline = Pipeline.from_pretrained(
+#     "pyannote/speaker-diarization",
+#     use_auth_token=hf_token
+# )
 
 @app.post("/process-video")
 async def process_video(file: UploadFile = File(...)):
@@ -53,7 +75,7 @@ async def process_video(file: UploadFile = File(...)):
     extract_audio(input_video_path, audio_path)
 
     # 4. Perform speaker diarization on the extracted audio
-    diarization_result = run_diarization(audio_path, diarization_pipeline)
+    diarization_result = run_diarization(audio_path)
 
     # 5. Extract screenshots for each scene at 0.2 fps
     #    We'll store them in a directory named after the file_id
@@ -120,24 +142,114 @@ def extract_audio(video_path: str, audio_path: str):
         .run(quiet=True)
     )
 
-def run_diarization(audio_path: str, pipeline):
+def transcribe_audio(audio_path: str) -> Optional[list[TranscriptionSegment]]:
     """
-    Run speaker diarization using pyannote.audio pipeline.
-    Returns a list of { start, end, speaker } segments.
+    Transcribe audio using OpenAI's Whisper API.
+
+    Args:
+        audio_path (str): Path to the audio file.
+        api_key (str): OpenAI API key.
+        model (str): Whisper model to use (default: "whisper-1").
+
+    Returns:
+        list: List of transcription segments with {start, end, text}.
     """
-    # Inference
-    diarization = pipeline(audio_path)
+    url = "https://api.openai.com/v1/audio/transcriptions"
 
-    # Build a structured result
-    diarization_result = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        diarization_result.append({
-            "start": turn.start,
-            "end": turn.end,
-            "speaker": speaker
-        })
+    with open(audio_path, "rb") as audio_file:
+        transcript = openai_client.audio.transcriptions.create(
+            file=audio_file,
+            model="whisper-1",
+            response_format="verbose_json",
+            timestamp_granularities=["segment"]
+        )
+        return transcript.segments
 
-    return diarization_result
+
+def run_diarization(audio_path: str) -> list:
+    """
+    Run speaker diarization and align with transcription using Google Cloud Speech-to-Text API.
+    Returns a list of {start, end, speaker, text} segments.
+
+    Args:
+        audio_path (str): Path to the audio file.
+
+    Returns:
+        list: Aligned results with {start, end, speaker, text}.
+    """
+    # Initialize the Speech-to-Text client
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\eyyypc\PycharmProjects\Murder-Mystery\backend\ensemble-demo-421315-ab61fb41873d.json"
+
+    client = speech.SpeechClient()
+
+    # Read the audio file
+    with io.open(audio_path, "rb") as audio_file:
+        audio_content = audio_file.read()
+
+    diarization_config = speech.SpeakerDiarizationConfig(
+        enable_speaker_diarization=True,
+        min_speaker_count=2,
+        max_speaker_count=10,
+    )
+
+    # Configure the request
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        language_code="en-US",
+        diarization_config=diarization_config,
+        enable_word_time_offsets=True,
+    )
+
+    # Load audio data
+    audio = speech.RecognitionAudio(content=audio_content)
+
+    # Perform transcription with diarization
+    response = client.recognize(config=config, audio=audio)
+
+    # Process results into segments
+    aligned_results = []
+    current_segment = {
+        "start": None,
+        "end": None,
+        "speaker": None,
+        "text": ""
+    }
+
+    for result in response.results:
+        # The first alternative is typically the most accurate
+        alternative = result.alternatives[0]
+
+        for word_info in alternative.words:
+            word_start = word_info.start_time.total_seconds()
+            word_end = word_info.end_time.total_seconds()
+            speaker_tag = word_info.speaker_tag  # Speaker ID
+            word_text = word_info.word
+
+            # Check if the speaker changed or it's the first word
+            if current_segment["speaker"] != f"Speaker {speaker_tag}":
+                # If there is an existing segment, finalize it
+                if current_segment["speaker"]:
+                    aligned_results.append(current_segment)
+
+                # Start a new segment
+                current_segment = {
+                    "start": word_start,
+                    "end": word_end,
+                    "speaker": f"Speaker {speaker_tag}",
+                    "text": word_text
+                }
+            else:
+                # Continue the current segment
+                current_segment["end"] = word_end
+                current_segment["text"] += f" {word_text}"
+
+    # Append the last segment
+    if current_segment["speaker"]:
+        aligned_results.append(current_segment)
+
+    return aligned_results
+
+
 
 def extract_screenshots(video_path: str, scenes: list, output_dir: str):
     """
@@ -182,12 +294,12 @@ def extract_screenshots(video_path: str, scenes: list, output_dir: str):
 
     return screenshot_data
 
-# Generate the OpenAPI schema
-openapi_schema = app.openapi()
-
-# Save the schema to a JSON file
-with open("openapi_schema.json", "w") as f:
-    json.dump(openapi_schema, f)
+# # Generate the OpenAPI schema
+# openapi_schema = app.openapi()
+#
+# # Save the schema to a JSON file
+# with open("openapi_schema.json", "w") as f:
+#     json.dump(openapi_schema, f)
 
 
 def main():
