@@ -90,12 +90,6 @@ export default function Home() {
         </div>
           <div className="flip-container">
               <FlipCard></FlipCard>
-              <FlipCard></FlipCard>
-              <FlipCard></FlipCard>
-              <FlipCard></FlipCard>
-              <FlipCard></FlipCard>
-              <FlipCard></FlipCard>
-              <FlipCard></FlipCard>
           </div>
 
 
