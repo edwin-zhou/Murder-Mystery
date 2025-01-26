@@ -122,6 +122,7 @@ async def process_video(file: UploadFile = File(...)):
     5. Extract screenshots for each scene.
     6. Return scene info + diarization + screenshot paths.
     """
+    clear_database()
 
     # 1. Save the uploaded file
     file_id = str(uuid.uuid4())  # Unique ID for this file
@@ -452,6 +453,7 @@ def build_prompt_for_scene(scene):
            - Relationships are: INVOLVED_IN (Person → Event), OCCURRED_AT (Event → Time), LOCATED_IN (Event → Location), (Event) -[:HAS_EVIDENCE]-> (Evidence), LOCATED_AT (Person → Location), RELATES_TO (Person → Person), LEADS_TO (Motive → Event) 
            - Use MERGE or CREATE as necessary.
            - Add relevant properties from the scene, including times, speaker references, etc.
+        4. Return an object representing which person is the most suspicious based on the scene. return in the format: {{"person": "name", "suspicion_score": 0.8, "reasoning": "why they are suspicious"}}
         """
 
     images = [format_images_to_openai_content(screenshot) for screenshot in scene['screenshots']]
@@ -505,6 +507,14 @@ def run_query(raw_query: str):
             "error": str(e),
             "query": cleaned_query  # Include the cleaned query for debugging
         }
+
+def clear_database():
+    """
+    Deletes all nodes and relationships in the Neo4j database.
+    """
+    query = "MATCH (n) DETACH DELETE n"
+    with driver.session() as session:
+        session.run(query)
 
 # # Generate the OpenAPI schema
 # openapi_schema = app.openapi()
